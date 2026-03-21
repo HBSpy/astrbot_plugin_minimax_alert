@@ -1,6 +1,6 @@
 from astrbot.api.event import filter, AstrMessageEvent
 from astrbot.api.star import Context, Star, register
-from astrbot.api import AstrBotConfig
+from astrbot.api import AstrBotConfig, logger
 import aiohttp
 from datetime import datetime
 
@@ -26,55 +26,91 @@ class MiniMaxAlertPlugin(Star):
         self._session: aiohttp.ClientSession | None = None
 
     async def initialize(self):
-        self._session = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=10))
+        logger.info("MiniMax Alert 插件初始化中...")
 
-    def get_api_url(self, region: str, group_id: str) -> str:
+    async def _ensure_session(self):
+        if self._session is None or self._session.closed:
+            logger.info("创建懒初始化 ClientSession")
+            self._session = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=10))
+
+    def get_api_url(self, region: str, group_id: str) -> tuple[str, dict]:
+        params = {}
         if region == "国内":
-            return "https://www.minimaxi.com/v1/api/openplatform/coding_plan/remains"
+            url = "https://www.minimaxi.com/v1/api/openplatform/coding_plan/remains"
         elif region == "国际":
             if not group_id:
                 raise ValueError("国际版需要填写 GroupId")
-            return f"https://platform.minimax.io/v1/api/openplatform/coding_plan/remains?GroupId={group_id}"
+            url = "https://platform.minimax.io/v1/api/openplatform/coding_plan/remains"
+            params["GroupId"] = group_id
         else:
             raise ValueError("REGION 请选择 '国内' 或 '国际'")
+        return url, params
 
     def format_timestamp(self, ts: int) -> str:
         return datetime.fromtimestamp(ts / 1000).strftime("%Y-%m-%d %H:%M:%S")
 
     async def fetch_quota(self, api_key: str, region: str, group_id: str) -> dict:
-        url = self.get_api_url(region, group_id)
+        await self._ensure_session()
+
+        url, params = self.get_api_url(region, group_id)
         headers = {
             "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json"
         }
 
+        logger.info(f"发起 API 请求: url={url}, params={params}")
+
         try:
-            async with self._session.get(url, headers=headers) as response:
+            async with self._session.get(url, headers=headers, params=params) as response:
+                logger.info(f"收到响应状态码: {response.status}")
+
                 if response.status == 200:
-                    return await response.json()
+                    data = await response.json()
+                    logger.info(f"API 请求成功，返回数据长度: {len(str(data))}")
+                    return data
                 else:
                     title, suggestion = ERROR_MESSAGES.get(
                         response.status, ("未知错误", "请稍后重试")
                     )
+                    logger.error(f"API 请求失败: 状态码={response.status}, title={title}, suggestion={suggestion}")
+
                     try:
                         error_data = await response.json()
                         detail = error_data.get("base_resp", {}).get("status_msg", "")
-                    except Exception:
+                    except ValueError:
                         detail = await response.text()
 
+                    error_msg = f"{title}：{detail}" if detail else title
+                    error_msg_full = f"{error_msg}\n💡 建议：{suggestion}"
                     raise aiohttp.ClientResponseError(
                         response.request_info,
                         response.history,
                         status=response.status,
-                        message=f"{title}：{detail}" if detail else title,
+                        message=error_msg_full,
                         headers=response.headers,
                     )
         except aiohttp.ClientResponseError as e:
+            logger.error(f"ClientResponseError: {e.message} (状态码: {e.status})")
             raise QueryError(f"{e.message}（状态码：{e.status}）") from e
         except aiohttp.ClientConnectorError as e:
+            logger.error(f"网络连接失败: {str(e)}")
             raise QueryError("网络连接失败，请检查网络或 MiniMax 服务状态") from e
         except TimeoutError as e:
+            logger.error(f"请求超时: {str(e)}")
             raise QueryError("请求超时，请检查网络连接后重试") from e
+
+    REQUIRED_FIELDS = [
+        "current_interval_total_count",
+        "current_interval_usage_count",
+        "start_time",
+        "end_time",
+        "current_weekly_total_count",
+        "current_weekly_usage_count",
+        "weekly_start_time",
+        "weekly_end_time",
+        "remains_time",
+        "model_name",
+    ]
 
     def parse_data(self, data: dict) -> str:
         base_resp = data.get("base_resp", {})
@@ -92,34 +128,49 @@ class MiniMaxAlertPlugin(Star):
             }
             for key, msg in error_map.items():
                 if key in error_msg.lower():
+                    logger.error(f"API 返回业务错误: {msg} ({error_msg})")
                     raise QueryError(f"API 返回错误：{msg}（{error_msg}）")
+            logger.error(f"API 返回未知错误: {error_msg} (状态码: {status_code})")
             raise QueryError(f"API 返回错误：{error_msg}（状态码：{status_code}）")
 
         model_list = data.get("model_remains", [])
         if not model_list:
+            logger.warning("model_remains 列表为空")
             raise QueryError("未获取到任何额度数据，接口返回格式可能已变更")
 
-        model = model_list[0]
+        logger.info(f"解析 {len(model_list)} 个模型的额度数据")
 
-        intv_total = model["current_interval_total_count"]
-        intv_used = model["current_interval_usage_count"]
-        intv_remain = intv_total - intv_used
-        intv_percent = (intv_remain / intv_total) * 100 if intv_total > 0 else 0
+        result = "套餐名称：Token Plan\n"
 
-        week_total = model["current_weekly_total_count"]
-        week_used = model["current_weekly_usage_count"]
-        week_remain = week_total - week_used
-        week_percent = (week_remain / week_total) * 100 if week_total > 0 else 0
+        for idx, model in enumerate(model_list):
+            missing_fields = [f for f in self.REQUIRED_FIELDS if model.get(f) is None]
+            if missing_fields:
+                logger.warning(f"模型 {idx} 缺少必填字段: {missing_fields}")
+                raise QueryError(f"数据格式异常，缺少必填字段: {', '.join(missing_fields)}")
 
-        remains_time_minutes = round(model['remains_time'] / 60, 1)
+            model_name = model.get("model_name", f"模型{idx}")
 
-        result = f"套餐名称：Token Plan\n"
-        result += f"5小时剩余/总额：{intv_remain}/{intv_total} ({intv_percent:.1f}%)\n"
-        result += f"本周剩余/总额：{week_remain}/{week_total} ({week_percent:.1f}%)\n"
-        result += f"\n📅 5小时滚动周期：{self.format_timestamp(model['start_time'])} ~ {self.format_timestamp(model['end_time'])}\n"
-        result += f"📅 本周周期：{self.format_timestamp(model['weekly_start_time'])} ~ {self.format_timestamp(model['weekly_end_time'])}\n"
-        result += f"⏰ 距离5小时重置：{remains_time_minutes} 分钟\n"
-        result += f"\n✅ 查询完成！"
+            intv_total = model.get("current_interval_total_count", 0)
+            intv_used = model.get("current_interval_usage_count", 0)
+            intv_remain = intv_total - intv_used
+            intv_percent = (intv_remain / intv_total) * 100 if intv_total > 0 else 0
+
+            week_total = model.get("current_weekly_total_count", 0)
+            week_used = model.get("current_weekly_usage_count", 0)
+            week_remain = week_total - week_used
+            week_percent = (week_remain / week_total) * 100 if week_total > 0 else 0
+
+            remains_time_minutes = round(model.get('remains_time', 0) / 60, 1)
+
+            result += f"\n{'='*30}\n"
+            result += f"🤖 模型：{model_name}\n"
+            result += f"5小时剩余/总额：{intv_remain}/{intv_total} ({intv_percent:.1f}%)\n"
+            result += f"本周剩余/总额：{week_remain}/{week_total} ({week_percent:.1f}%)\n"
+            result += f"\n📅 5小时滚动周期：{self.format_timestamp(model.get('start_time', 0))} ~ {self.format_timestamp(model.get('end_time', 0))}\n"
+            result += f"📅 本周周期：{self.format_timestamp(model.get('weekly_start_time', 0))} ~ {self.format_timestamp(model.get('weekly_end_time', 0))}\n"
+            result += f"⏰ 距离5小时重置：{remains_time_minutes} 分钟"
+
+        result += f"\n\n✅ 查询完成！"
 
         return result
 
@@ -130,24 +181,30 @@ class MiniMaxAlertPlugin(Star):
         group_id = self.config.get("group_id", "")
 
         if not api_key:
+            logger.warning("用户未配置 API Key")
             yield event.plain_result("⚠️ 请先在插件设置中配置 MiniMax API Key")
             return
 
         try:
+            logger.info(f"开始查询用量: region={region}, group_id={group_id}")
             quota_data = await self.fetch_quota(api_key, region, group_id)
             result = self.parse_data(quota_data)
             yield event.plain_result(result)
         except ValueError as e:
+            logger.error(f"配置错误: {str(e)}")
             yield event.plain_result(f"⚠️ 配置错误：{str(e)}")
         except QueryError as e:
+            logger.error(f"业务查询错误: {str(e)}")
             yield event.plain_result(f"❌ {str(e)}")
-        except Exception as e:
-            yield event.plain_result(f"❌ 查询失败：{str(e)}")
+        except aiohttp.ClientError as e:
+            logger.error(f"网络错误: {str(e)}")
+            yield event.plain_result(f"❌ 网络错误：{str(e)}")
 
     async def terminate(self):
-        if self._session:
+        if self._session and not self._session.closed:
             await self._session.close()
             self._session = None
+            logger.info("ClientSession 已关闭")
 
 
 class QueryError(Exception):
