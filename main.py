@@ -138,39 +138,33 @@ class MiniMaxAlertPlugin(Star):
             logger.warning("model_remains 列表为空")
             raise QueryError("未获取到任何额度数据，接口返回格式可能已变更")
 
-        logger.info(f"解析 {len(model_list)} 个模型的额度数据")
+        logger.info(f"解析额度数据（{len(model_list)} 个模型，共用用量）")
+
+        model = model_list[0]
+        missing_fields = [f for f in self.REQUIRED_FIELDS if model.get(f) is None]
+        if missing_fields:
+            logger.warning(f"缺少必填字段: {missing_fields}")
+            raise QueryError(f"数据格式异常，缺少必填字段: {', '.join(missing_fields)}")
+
+        intv_total = model.get("current_interval_total_count", 0)
+        intv_used = model.get("current_interval_usage_count", 0)
+        intv_remain = intv_total - intv_used
+        intv_percent = (intv_remain / intv_total) * 100 if intv_total > 0 else 0
+
+        week_total = model.get("current_weekly_total_count", 0)
+        week_used = model.get("current_weekly_usage_count", 0)
+        week_remain = week_total - week_used
+        week_percent = (week_remain / week_total) * 100 if week_total > 0 else 0
+
+        remains_time_minutes = round(model.get('remains_time', 0) / 60, 1)
 
         result = "套餐名称：Token Plan\n"
-
-        for idx, model in enumerate(model_list):
-            missing_fields = [f for f in self.REQUIRED_FIELDS if model.get(f) is None]
-            if missing_fields:
-                logger.warning(f"模型 {idx} 缺少必填字段: {missing_fields}")
-                raise QueryError(f"数据格式异常，缺少必填字段: {', '.join(missing_fields)}")
-
-            model_name = model.get("model_name", f"模型{idx}")
-
-            intv_total = model.get("current_interval_total_count", 0)
-            intv_used = model.get("current_interval_usage_count", 0)
-            intv_remain = intv_total - intv_used
-            intv_percent = (intv_remain / intv_total) * 100 if intv_total > 0 else 0
-
-            week_total = model.get("current_weekly_total_count", 0)
-            week_used = model.get("current_weekly_usage_count", 0)
-            week_remain = week_total - week_used
-            week_percent = (week_remain / week_total) * 100 if week_total > 0 else 0
-
-            remains_time_minutes = round(model.get('remains_time', 0) / 60, 1)
-
-            result += f"\n{'='*30}\n"
-            result += f"🤖 模型：{model_name}\n"
-            result += f"5小时剩余/总额：{intv_remain}/{intv_total} ({intv_percent:.1f}%)\n"
-            result += f"本周剩余/总额：{week_remain}/{week_total} ({week_percent:.1f}%)\n"
-            result += f"\n📅 5小时滚动周期：{self.format_timestamp(model.get('start_time', 0))} ~ {self.format_timestamp(model.get('end_time', 0))}\n"
-            result += f"📅 本周周期：{self.format_timestamp(model.get('weekly_start_time', 0))} ~ {self.format_timestamp(model.get('weekly_end_time', 0))}\n"
-            result += f"⏰ 距离5小时重置：{remains_time_minutes} 分钟"
-
-        result += f"\n\n✅ 查询完成！"
+        result += f"5小时剩余/总额：{intv_remain}/{intv_total} ({intv_percent:.1f}%)\n"
+        result += f"本周剩余/总额：{week_remain}/{week_total} ({week_percent:.1f}%)\n"
+        result += f"\n📅 5小时滚动周期：{self.format_timestamp(model.get('start_time', 0))} ~ {self.format_timestamp(model.get('end_time', 0))}\n"
+        result += f"📅 本周周期：{self.format_timestamp(model.get('weekly_start_time', 0))} ~ {self.format_timestamp(model.get('weekly_end_time', 0))}\n"
+        result += f"⏰ 距离5小时重置：{remains_time_minutes} 分钟\n"
+        result += f"\n✅ 查询完成！"
 
         return result
 
