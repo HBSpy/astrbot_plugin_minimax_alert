@@ -1,0 +1,27 @@
+{
+    "api_key": {
+        "description": "MiniMax Token Plan API Key",
+        "type": "string",
+        "hint": "请前往 MiniMax 开放平台获取 API Key。这是调用用量查询接口的必需凭证。",
+        "obvious_hint": true,
+        "default": "",
+        "category": "minimax"
+    },
+    "region": {
+        "description": "API 版本",
+        "type": "string",
+        "hint": "国内版使用 minimaxi.com，国际版使用 platform.minimax.io。",
+        "obvious_hint": false,
+        "default": "国内",
+        "options": ["国内", "国际"],
+        "category": "minimax"
+    },
+    "group_id": {
+        "description": "Group ID（国际版必填）",
+        "type": "string",
+        "hint": "仅国际版需要填写，用于指定查询的分组。",
+        "obvious_hint": false,
+        "default": "",
+        "category": "minimax"
+    }
+}
