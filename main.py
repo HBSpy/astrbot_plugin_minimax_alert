@@ -2,7 +2,7 @@ from astrbot.api.event import filter, AstrMessageEvent
 from astrbot.api.star import Context, Star, register
 from astrbot.api import AstrBotConfig, logger
 import aiohttp
-from datetime import datetime
+from datetime import datetime, timezone
 
 
 
@@ -47,7 +47,9 @@ class MiniMaxAlertPlugin(Star):
         return url, params
 
     def format_timestamp(self, ts: int) -> str:
-        return datetime.fromtimestamp(ts / 1000).strftime("%Y-%m-%d %H:%M:%S")
+        if ts <= 0:
+            return "未知"
+        return datetime.fromtimestamp(ts / 1000, tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
 
     async def fetch_quota(self, api_key: str, region: str, group_id: str) -> dict:
         await self._ensure_session()
@@ -77,7 +79,7 @@ class MiniMaxAlertPlugin(Star):
                     try:
                         error_data = await response.json()
                         detail = error_data.get("base_resp", {}).get("status_msg", "")
-                    except ValueError:
+                    except Exception:
                         detail = await response.text()
 
                     error_msg = f"{title}：{detail}" if detail else title
@@ -108,8 +110,6 @@ class MiniMaxAlertPlugin(Star):
         "current_weekly_usage_count",
         "weekly_start_time",
         "weekly_end_time",
-        "remains_time",
-        "model_name",
     ]
 
     def parse_data(self, data: dict) -> str:
@@ -156,9 +156,16 @@ class MiniMaxAlertPlugin(Star):
         week_remain = week_total - week_used
         week_percent = (week_remain / week_total) * 100 if week_total > 0 else 0
 
-        remains_time_minutes = round(model.get('remains_time', 0) / 60, 1)
+        end_time_ms = model.get('end_time', 0)
+        if end_time_ms > 0:
+            end_time = datetime.fromtimestamp(end_time_ms / 1000, tz=timezone.utc)
+            now = datetime.now(tz=timezone.utc)
+            delta = end_time - now
+            remains_time_minutes = max(0, int(delta.total_seconds() / 60))
+        else:
+            remains_time_minutes = 0
 
-        result = "套餐名称：Token Plan\n"
+        result = "套餐：MiniMax Token Plan\n"
         result += f"5小时剩余/总额：{intv_remain}/{intv_total} ({intv_percent:.1f}%)\n"
         result += f"本周剩余/总额：{week_remain}/{week_total} ({week_percent:.1f}%)\n"
         result += f"\n📅 5小时滚动周期：{self.format_timestamp(model.get('start_time', 0))} ~ {self.format_timestamp(model.get('end_time', 0))}\n"
