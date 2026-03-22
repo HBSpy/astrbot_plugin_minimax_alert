@@ -19,24 +19,24 @@ class MiniMaxAlertPlugin(Star):
     async def initialize(self):
         await self._api.initialize()
     
-    async def _check_whitelist(self, event: AstrMessageEvent) -> bool:
+    def _check_whitelist(self, event: AstrMessageEvent) -> bool:
         """
         检查用户是否在白名单中
-        
+
         Args:
             event: 消息事件
-            
+
         Returns:
             True 如果用户允许访问
         """
-        user_sid = str(event.user_id)
+        user_sid = str(event.session_id)
         whitelist_manager = self._config_manager.get_whitelist()
         return whitelist_manager.check_whitelist(user_sid)
     
     @filter.command("用量")
     async def query_quota(self, event: AstrMessageEvent):
         """查询配额命令"""
-        if not await self._check_whitelist(event):
+        if not self._check_whitelist(event):
             yield event.plain_result("⚠️ 该功能仅对白名单用户开放")
             return
         
