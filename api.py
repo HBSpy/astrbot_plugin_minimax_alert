@@ -94,15 +94,14 @@ class MiniMaxAPI:
                 logger.info(f"收到响应状态码: {response.status}")
                 
                 if response.status == 200:
-                    data = await response.json()
-                    if isinstance(data, dict):
-                        data_keys = len(data)
-                    elif isinstance(data, list):
-                        data_keys = len(data)
-                    else:
-                        data_keys = 0
-                    logger.info(f"API 请求成功，返回数据包含 {data_keys} 个字段")
-                    return data
+                    try:
+                        data = await response.json()
+                        data_keys = len(data) if isinstance(data, (dict, list)) else 0
+                        logger.info(f"API 请求成功，返回数据包含 {data_keys} 个字段")
+                        return data
+                    except (aiohttp.ContentTypeError, ValueError) as e:
+                        logger.error(f"JSON 解析失败: {str(e)}")
+                        raise QueryError("API 返回数据格式异常，请稍后重试") from e
                 else:
                     title, suggestion = ERROR_MESSAGES.get(
                         response.status, ("未知错误", "请稍后重试")
@@ -117,22 +116,19 @@ class MiniMaxAPI:
                     
                     error_msg = f"{title}：{detail}" if detail else title
                     error_msg_full = f"{error_msg}\n💡 建议：{suggestion}"
-                    raise aiohttp.ClientResponseError(
-                        response.request_info,
-                        response.history,
-                        status=response.status,
-                        message=error_msg_full,
-                        headers=response.headers,
-                    )
-        except aiohttp.ClientResponseError as e:
-            logger.error(f"ClientResponseError: {e.message} (状态码: {e.status})")
-            raise QueryError(f"{e.message}（状态码：{e.status}）") from e
+                    logger.error(f"API 错误详情: {error_msg_full}")
+                    raise QueryError(error_msg_full)
+        except QueryError:
+            raise
         except aiohttp.ClientConnectorError as e:
             logger.error(f"网络连接失败: {str(e)}")
             raise QueryError("网络连接失败，请检查网络或 MiniMax 服务状态") from e
         except TimeoutError as e:
             logger.error(f"请求超时: {str(e)}")
             raise QueryError("请求超时，请检查网络连接后重试") from e
+        except Exception as e:
+            logger.error(f"未知错误: {str(e)}")
+            raise QueryError(f"请求失败：{str(e)}") from e
     
     async def terminate(self):
         """关闭会话"""

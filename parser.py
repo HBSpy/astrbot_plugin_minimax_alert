@@ -6,6 +6,13 @@ from astrbot.api import logger
 
 CHINA_TIMEZONE_OFFSET = 8
 
+PLAN_NAMES = {
+    600: "Starter",
+    1500: "Plus",
+    4500: "Max",
+    30000: "Ultra",
+}
+
 
 class DataParser:
     """数据解析器"""
@@ -37,6 +44,18 @@ class DataParser:
             ts / 1000,
             tz=timezone(timedelta(hours=CHINA_TIMEZONE_OFFSET))
         ).strftime("%Y-%m-%d %H:%M:%S")
+    
+    def _get_plan_name(self, intv_total: int) -> str:
+        """
+        根据五小时总额获取套餐名称
+
+        Args:
+            intv_total: 五小时总额
+
+        Returns:
+            套餐名称
+        """
+        return PLAN_NAMES.get(intv_total, "Token Plan")
 
     def parse_quota_data(self, data: Dict[str, Any]) -> str:
         """
@@ -61,7 +80,7 @@ class DataParser:
                 "invalid_token": "API Key 无效，请检查配置",
                 "token_expired": "API Key 已过期，请重新获取",
                 "quota_exceeded": "额度已用尽，请等待重置",
-                "rate_limited": "请求过于频繁，请稍后再重试",
+                "rate_limited": "请求过于频繁，请稍后重试",
                 "group_not_found": "Group ID 不存在，请检查配置",
                 "permission_denied": "无权限访问，请确认账户状态",
             }
@@ -139,10 +158,18 @@ class DataParser:
         Returns:
             格式化的输出字符串
         """
+        plan_name = self._get_plan_name(intv_total)
+        intv_line = f"5小时剩余/总额：{intv_remain}/{intv_total} ({intv_percent:.1f}%)"
+        
+        if week_total == 0 and week_remain == 0:
+            week_line = "本周剩余/总额：无周限额"
+        else:
+            week_line = f"本周剩余/总额：{week_remain}/{week_total} ({week_percent:.1f}%)"
+        
         lines = [
-            "套餐：MiniMax Token Plan",
-            f"5小时剩余/总额：{intv_remain}/{intv_total} ({intv_percent:.1f}%)",
-            f"本周剩余/总额：{week_remain}/{week_total} ({week_percent:.1f}%)",
+            f"套餐：MiniMax Token Plan {plan_name}",
+            intv_line,
+            week_line,
             "",
             f"📅 5小时滚动周期：{self.format_timestamp(start_time)} ~ {self.format_timestamp(end_time)}",
             f"📅 本周周期：{self.format_timestamp(weekly_start_time)} ~ {self.format_timestamp(weekly_end_time)}",

@@ -8,7 +8,7 @@ class WhitelistManager:
         Args:
             whitelist: 白名单列表，默认为空列表
         """
-        self._whitelist = whitelist if whitelist is not None else []
+        self._whitelist = whitelist.copy() if whitelist else []
     
     def check_whitelist(self, user_sid: str) -> bool:
         """
@@ -73,4 +73,4 @@ class WhitelistManager:
         Args:
             whitelist: 新的白名单列表
         """
-        self._whitelist = whitelist if whitelist is not None else []
+        self._whitelist = whitelist.copy() if whitelist else []
