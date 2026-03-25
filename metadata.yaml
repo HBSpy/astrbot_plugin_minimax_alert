@@ -1,6 +1,6 @@
 name: astrbot_plugin_minimax_alert
 display_name: MiniMax 用量查询
-desc: 查询 MiniMax Token Plan API 用量信息，支持国内版和国际版。查看5小时周期和本周周期的剩余额度。
-author: Crystar-1
+desc: forked from Crystar-1/astrbot_plugin_minimax_alert，查询 MiniMax Token Plan API 用量信息，支持国内版和国际版。兼容多条模型及两种重置机制。
+author: HBSpy
 repo: https://github.com/Crystar-1/astrbot_plugin_minimax_alert
 version: v1.3.0

@@ -14,6 +14,62 @@ PLAN_NAMES = {
 }
 
 
+def detect_reset_type(start_time: int, end_time: int) -> str:
+    """
+    根据起止时间检测重置类型
+
+    Args:
+        start_time: 起始时间戳（毫秒）
+        end_time: 结束时间戳（毫秒）
+
+    Returns:
+        重置类型: "daily" (按天), "5h" (5小时滚动), "weekly" (周), "unknown" (未知)
+    """
+    if start_time <= 0 or end_time <= 0:
+        return "unknown"
+
+    duration_ms = end_time - start_time
+    duration_hours = duration_ms / (1000 * 60 * 60)
+
+    # 5小时滚动
+    if 4 <= duration_hours <= 6:
+        return "5h"
+    # 按天重置（约24小时）
+    elif 23 <= duration_hours <= 25:
+        return "daily"
+    # 周重置（约168小时）
+    elif 166 <= duration_hours <= 170:
+        return "weekly"
+    else:
+        return "unknown"
+
+
+def format_remaining_time(ms: int) -> str:
+    """
+    格式化剩余时间
+
+    Args:
+        ms: 剩余时间（毫秒）
+
+    Returns:
+        格式化的剩余时间字符串
+    """
+    if ms <= 0:
+        return "已过期"
+
+    total_seconds = ms / 1000
+    days = int(total_seconds // 86400)
+    hours = int((total_seconds % 86400) // 3600)
+    minutes = int((total_seconds % 3600) // 60)
+
+    if days > 0:
+        return f"{days}天{hours}小时"
+    elif hours > 0:
+        return f"{hours}小时{minutes}分钟"
+    else:
+        return f"{minutes}分钟"
+
+
 class DataParser:
     """数据解析器"""
 
@@ -132,6 +188,17 @@ class DataParser:
                 remains_time_minutes = max(0, int(delta.total_seconds() / 60))
 
             model_name = model.get("model_name", f"Model {idx + 1}")
+
+            # 检测重置类型
+            reset_type = detect_reset_type(
+                model.get('start_time', 0),
+                model.get('end_time', 0)
+            )
+            weekly_reset_type = detect_reset_type(
+                model.get('weekly_start_time', 0),
+                model.get('weekly_end_time', 0)
+            )
+
             model_outputs.append({
                 "model_name": model_name,
                 "intv_remain": intv_remain,
@@ -145,6 +212,8 @@ class DataParser:
                 "weekly_start_time": model.get('weekly_start_time', 0),
                 "weekly_end_time": model.get('weekly_end_time', 0),
                 "remains_time_minutes": remains_time_minutes,
+                "reset_type": reset_type,
+                "weekly_reset_type": weekly_reset_type,
             })
 
         if not model_outputs:
@@ -164,14 +233,39 @@ class DataParser:
         """
         lines = []
 
+        # 收集所有唯一的重置类型
+        intv_reset_types = set(m.get("reset_type", "5h") for m in model_outputs)
+        week_reset_types = set(m.get("weekly_reset_type", "weekly") for m in model_outputs)
+
+        # 5小时重置类型显示名称
+        intv_reset_name = {
+            "5h": "5小时滚动",
+            "daily": "按日重置",
+            "weekly": "按周重置",
+            "unknown": "周期",
+        }.get(list(intv_reset_types)[0] if intv_reset_types else "5h", "周期")
+
+        # 周重置类型显示名称
+        week_reset_name = {
+            "5h": "5小时滚动",
+            "daily": "按日重置",
+            "weekly": "本周周期",
+            "unknown": "周期",
+        }.get(list(week_reset_types)[0] if week_reset_types else "weekly", "本周周期")
+
         for model in model_outputs:
             plan_name = self._get_plan_name(model["intv_total"])
-            intv_line = f"5小时剩余/总额：{model['intv_remain']}/{model['intv_total']} ({model['intv_percent']:.1f}%)"
+
+            # 根据重置类型调整显示文本
+            if model.get("reset_type") == "daily":
+                intv_line = f"日剩余/总额：{model['intv_remain']}/{model['intv_total']} ({model['intv_percent']:.1f}%)"
+            else:
+                intv_line = f"5小时剩余/总额：{model['intv_remain']}/{model['intv_total']} ({model['intv_percent']:.1f}%)"
 
             if model["week_total"] == 0 and model["week_remain"] == 0:
-                week_line = "本周剩余/总额：无周限额"
+                week_line = f"{week_reset_name.split('重置')[0] if '重置' in week_reset_name else week_reset_name}剩余/总额：无周限额"
             else:
-                week_line = f"本周剩余/总额：{model['week_remain']}/{model['week_total']} ({model['week_percent']:.1f}%)"
+                week_line = f"{week_reset_name.split('重置')[0] if '重置' in week_reset_name else week_reset_name}剩余/总额：{model['week_remain']}/{model['week_total']} ({model['week_percent']:.1f}%)"
 
             model_lines = [
                 f"🤖 {model['model_name']} ({plan_name})",
@@ -182,11 +276,21 @@ class DataParser:
 
         # 添加公共的时间信息（使用第一个模型的时间）
         first_model = model_outputs[0]
+        intv_reset = first_model.get("reset_type", "5h")
+        week_reset = first_model.get("weekly_reset_type", "weekly")
+
+        intv_label = {"5h": "5小时滚动周期", "daily": "日周期", "weekly": "周周期", "unknown": "周期"}.get(intv_reset, "周期")
+        week_label = {"5h": "5小时滚动", "daily": "日周期", "weekly": "本周周期", "unknown": "周期"}.get(week_reset, "本周周期")
+
+        # 格式化剩余时间
+        remains_time_ms = first_model.get("remains_time_minutes", 0) * 60 * 1000
+        remains_str = format_remaining_time(remains_time_ms)
+
         lines.extend([
             "",
-            f"📅 5小时滚动周期：{self.format_timestamp(first_model['start_time'])} ~ {self.format_timestamp(first_model['end_time'])}",
-            f"📅 本周周期：{self.format_timestamp(first_model['weekly_start_time'])} ~ {self.format_timestamp(first_model['weekly_end_time'])}",
-            f"⏰ 距离5小时重置：{first_model['remains_time_minutes']} 分钟",
+            f"📅 {intv_label}：{self.format_timestamp(first_model['start_time'])} ~ {self.format_timestamp(first_model['end_time'])}",
+            f"📅 {week_label}：{self.format_timestamp(first_model['weekly_start_time'])} ~ {self.format_timestamp(first_model['weekly_end_time'])}",
+            f"⏰ 距离{intv_label.split('周期')[0]}重置：{remains_str}",
             "",
             "✅ 查询完成！",
         ])
@@ -213,21 +317,43 @@ class DataParser:
             格式化的输出字符串
         """
         plan_name = self._get_plan_name(intv_total)
-        intv_line = f"5小时剩余/总额：{intv_remain}/{intv_total} ({intv_percent:.1f}%)"
+
+        # 检测重置类型
+        reset_type = detect_reset_type(start_time, end_time)
+        weekly_reset_type = detect_reset_type(weekly_start_time, weekly_end_time)
+
+        # 根据重置类型调整显示文本
+        if reset_type == "daily":
+            intv_line = f"日剩余/总额：{intv_remain}/{intv_total} ({intv_percent:.1f}%)"
+            intv_label = "日周期"
+            intv_reset_label = "日重置"
+        else:
+            intv_line = f"5小时剩余/总额：{intv_remain}/{intv_total} ({intv_percent:.1f}%)"
+            intv_label = "5小时滚动周期"
+            intv_reset_label = "5小时重置"
+
+        if weekly_reset_type == "daily":
+            week_label = "日周期"
+        else:
+            week_label = "本周周期"
 
         if week_total == 0 and week_remain == 0:
-            week_line = "本周剩余/总额：无周限额"
+            week_line = f"{week_label}剩余/总额：无周限额"
         else:
-            week_line = f"本周剩余/总额：{week_remain}/{week_total} ({week_percent:.1f}%)"
+            week_line = f"{week_label}剩余/总额：{week_remain}/{week_total} ({week_percent:.1f}%)"
+
+        # 格式化剩余时间
+        remains_time_ms = remains_time_minutes * 60 * 1000
+        remains_str = format_remaining_time(remains_time_ms)
 
         lines = [
             f"套餐：MiniMax Token Plan {plan_name}",
             intv_line,
             week_line,
             "",
-            f"📅 5小时滚动周期：{self.format_timestamp(start_time)} ~ {self.format_timestamp(end_time)}",
-            f"📅 本周周期：{self.format_timestamp(weekly_start_time)} ~ {self.format_timestamp(weekly_end_time)}",
-            f"⏰ 距离5小时重置：{remains_time_minutes} 分钟",
+            f"📅 {intv_label}：{self.format_timestamp(start_time)} ~ {self.format_timestamp(end_time)}",
+            f"📅 {week_label}：{self.format_timestamp(weekly_start_time)} ~ {self.format_timestamp(weekly_end_time)}",
+            f"⏰ 距离{intv_reset_label}：{remains_str}",
             "",
             "✅ 查询完成！",
         ]
